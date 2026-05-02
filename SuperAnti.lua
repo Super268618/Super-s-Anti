@@ -1,11 +1,12 @@
 --[[
-    Super Anti V2 - 私有持续更新版
-    版本: 2.0.0 | 日期: 2026-04-29
-    说明: 已修复V1缺陷，新增多项防御功能，仅限个人使用。
-    警告: 高风险脚本，请在私人服务器或可信任环境中运行。
+    ====================================================================
+    🛡️ Super Anti V2.1 (Delta Executor Edition)
+    ====================================================================
+    Features: Anti-Kick, Anti-Ban, Anti-Fling, Anti-Aimbot, Anti-Void, 
+    Anti-Suck, Fullbright, ESP, State-Locking, and more.
+    ====================================================================
 --]]
 
--- ================== 环境与变量初始化 ==================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -14,413 +15,346 @@ local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterGui = game:GetService("StarterGui")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local TeleportService = game:GetService("TeleportService")
-local HttpService = game:GetService("HttpService")
-local LogService = game:GetService("LogService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-local Mouse = LocalPlayer:GetMouse()
 
--- ================== 配置中心 (可自由调参) ==================
-local Config = {
-    Gravity = 196.2,                -- 正常重力
-    VoidThreshold = -100,           -- 虚空判定高度
-    DangerHealth = 10,              -- 触发反死亡护盾的血量
-    TeleportDistance = 60,          -- 危险时传送距离
-    FlingCheckInterval = 0.1,       -- 反甩飞检测间隔
-    AntiLagMaxPing = 300,           -- 最大允许延迟 (ms)
-    MaxSimulationRadius = 100,      -- 模拟半径限制
-    UI = {
-        AccentColor = Color3.fromRGB(0, 255, 200),
-        BackgroundColor = Color3.fromRGB(20, 20, 30),
-        TextColor = Color3.fromRGB(255, 255, 255),
+-- ================== 1. System State & Variables ==================
+getgenv().AntiSystem = getgenv().AntiSystem or {
+    Active = false,
+    Connections = {},
+    Settings = {
+        Gravity = 196.2,
+        VoidThreshold = -100,
+        DangerHealth = 15,
     }
 }
 
--- ================== 工具库 ==================
-local Util = {}
-function Util.TweenObject(obj, tweenInfo, props)
-    local tween = TweenService:Create(obj, tweenInfo, props)
-    tween:Play()
-    return tween
-end
-function Util.IsAlive(player)
-    local char = player.Character
-    if not char then return false end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    return hum and hum.Health > 0
-end
-function Util.GetRoot(char)
-    return char and char:FindFirstChild("HumanoidRootPart")
-end
+local OriginalLighting = {
+    ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+    GlobalShadows = Lighting.GlobalShadows,
+    Brightness = Lighting.Brightness
+}
 
--- ================== 现代化UI系统 ==================
-local UI = {}
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SuperAntiV2_Main"
-ScreenGui.Parent = PlayerGui
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
--- 加载屏幕
-function UI.CreateLoadingScreen()
-    local bg = Instance.new("Frame")
-    bg.Size = UDim2.new(1, 0, 1, 0)
-    bg.BackgroundColor3 = Config.UI.BackgroundColor
-    bg.BorderSizePixel = 0
-    bg.Name = "LoadingBG"
-    bg.Parent = ScreenGui
-
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(0.6, 0, 0.15, 0)
-    title.Position = UDim2.new(0.2, 0, 0.4, 0)
-    title.Text = "Super Anti V2"
-    title.TextColor3 = Config.UI.AccentColor
-    title.TextScaled = true
-    title.Font = Enum.Font.GothamBlack
-    title.BackgroundTransparency = 1
-    title.Parent = bg
-
-    local progressText = Instance.new("TextLabel")
-    progressText.Size = UDim2.new(0.4, 0, 0.08, 0)
-    progressText.Position = UDim2.new(0.3, 0, 0.55, 0)
-    progressText.Text = "0%"
-    progressText.TextColor3 = Config.UI.TextColor
-    progressText.TextScaled = true
-    progressText.Font = Enum.Font.Code
-    progressText.BackgroundTransparency = 1
-    progressText.Name = "Progress"
-    progressText.Parent = bg
-
-    -- 模拟进度
-    coroutine.wrap(function()
-        for i = 0, 100, math.random(3, 7) do
-            progressText.Text = i .. "%"
-            task.wait(0.03)
+-- ================== 2. DELTA CORE HOOKS (Anti-Kick / Anti-Ban) ==================
+-- This runs immediately but only blocks actions if AntiSystem.Active is true
+if not getgenv().SuperAntiHooked then
+    getgenv().SuperAntiHooked = true
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        
+        if getgenv().AntiSystem.Active and not checkcaller() then
+            -- 1. Anti-Kick intercept
+            if (method == "Kick" or method == "kick") and self == LocalPlayer then
+                warn("🛡️ Super Anti [Delta]: Blocked client-side Kick attempt.")
+                return nil
+            end
+            
+            -- 2. Anti-Ban / Malicious Remote intercept
+            if method == "FireServer" or method == "InvokeServer" then
+                local remoteName = string.lower(self.Name)
+                if string.find(remoteName, "ban") or string.find(remoteName, "kick") or 
+                   string.find(remoteName, "crash") or string.find(remoteName, "punish") or 
+                   string.find(remoteName, "log") or string.find(remoteName, "detect") then
+                    warn("🛡️ Super Anti [Delta]: Blocked malicious remote ->", self.Name)
+                    return nil
+                end
+            end
         end
-        progressText.Text = "100%"
-        task.wait(0.3)
-        Util.TweenObject(bg, TweenInfo.new(0.6), {BackgroundTransparency = 1})
-        task.wait(0.6)
-        bg:Destroy()
-    end)()
+        return oldNamecall(self, ...)
+    end)
 end
 
--- 主控面板
-function UI.CreateMainPanel()
-    local openBtn = Instance.new("TextButton")
-    openBtn.Size = UDim2.new(0.12, 0, 0.05, 0)
-    openBtn.Position = UDim2.new(0.44, 0, 0.02, 0)
-    openBtn.BackgroundColor3 = Config.UI.AccentColor
-    openBtn.BorderSizePixel = 0
-    openBtn.Text = "Open"
-    openBtn.TextColor3 = Color3.fromRGB(0, 0, 0)
-    openBtn.TextScaled = true
-    openBtn.Font = Enum.Font.GothamBold
-    openBtn.AutoButtonColor = false
-    openBtn.Parent = ScreenGui
-    Instance.new("UICorner", openBtn).CornerRadius = UDim.new(0, 8)
+-- ================== 3. UI Generation ==================
+local function CreateMainGUI()
+    -- Cleanup old GUI if it exists
+    if PlayerGui:FindFirstChild("SuperAnti_Main") then
+        PlayerGui.SuperAnti_Main:Destroy()
+    end
 
-    local mainFrame = Instance.new("Frame")
-    mainFrame.Size = UDim2.new(0.45, 0, 0.6, 0)
-    mainFrame.Position = UDim2.new(0.275, 0, 0.2, 0)
-    mainFrame.BackgroundColor3 = Config.UI.BackgroundColor
-    mainFrame.BorderSizePixel = 0
-    mainFrame.Visible = false
-    mainFrame.Active = true
-    mainFrame.Draggable = true
-    mainFrame.Parent = ScreenGui
-    Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 12)
-    Instance.new("UIStroke", mainFrame).Thickness = 2
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "SuperAnti_Main"
+    ScreenGui.Parent = PlayerGui
+    ScreenGui.ResetOnSpawn = false
 
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0.12, 0)
-    title.Text = "Super Anti V2"
-    title.TextColor3 = Config.UI.AccentColor
-    title.TextScaled = true
-    title.Font = Enum.Font.GothamBlack
-    title.BackgroundTransparency = 1
-    title.Parent = mainFrame
+    -- Open Button
+    local OpenButton = Instance.new("TextButton")
+    OpenButton.Size = UDim2.new(0.15, 0, 0.06, 0)
+    OpenButton.Position = UDim2.new(0.425, 0, 0.02, 0)
+    OpenButton.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    OpenButton.Text = "🛡️ Super Anti V2.1"
+    OpenButton.TextColor3 = Color3.fromRGB(0, 255, 255)
+    OpenButton.TextScaled = true
+    OpenButton.Font = Enum.Font.GothamBold
+    OpenButton.Parent = ScreenGui
+    Instance.new("UICorner", OpenButton).CornerRadius = UDim.new(0, 8)
+    Instance.new("UIStroke", OpenButton).Thickness = 1.5
+    Instance.new("UIStroke", OpenButton).Color = Color3.fromRGB(0, 255, 255)
 
-    local status = Instance.new("TextLabel")
-    status.Size = UDim2.new(1, 0, 0.08, 0)
-    status.Position = UDim2.new(0, 0, 0.12, 0)
-    status.Text = "Status: Inactive"
-    status.TextColor3 = Color3.fromRGB(255, 100, 100)
-    status.TextScaled = true
-    status.Font = Enum.Font.Gotham
-    status.BackgroundTransparency = 1
-    status.Name = "Status"
-    status.Parent = mainFrame
+    -- Main Panel
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0.35, 0, 0.4, 0)
+    MainFrame.Position = UDim2.new(0.325, 0, 0.3, 0)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+    MainFrame.Visible = false
+    MainFrame.Parent = ScreenGui
+    Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+    Instance.new("UIStroke", MainFrame).Thickness = 2
+    Instance.new("UIStroke", MainFrame).Color = Color3.fromRGB(0, 200, 255)
 
-    local toggleBtn = Instance.new("TextButton")
-    toggleBtn.Size = UDim2.new(0.4, 0, 0.1, 0)
-    toggleBtn.Position = UDim2.new(0.3, 0, 0.35, 0)
-    toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-    toggleBtn.BorderSizePixel = 0
-    toggleBtn.Text = "Activate"
-    toggleBtn.TextColor3 = Config.UI.TextColor
-    toggleBtn.TextScaled = true
-    toggleBtn.Font = Enum.Font.GothamBold
-    toggleBtn.AutoButtonColor = false
-    toggleBtn.Name = "ToggleBtn"
-    toggleBtn.Parent = mainFrame
-    Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 8)
+    local TitleLabel = Instance.new("TextLabel")
+    TitleLabel.Size = UDim2.new(1, 0, 0.2, 0)
+    TitleLabel.BackgroundTransparency = 1
+    TitleLabel.Text = "GOD MODE DEFENSE"
+    TitleLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
+    TitleLabel.TextScaled = true
+    TitleLabel.Font = Enum.Font.GothamBlack
+    TitleLabel.Parent = MainFrame
 
-    local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0.08, 0, 0.08, 0)
-    closeBtn.Position = UDim2.new(0.9, 0, 0.02, 0)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
-    closeBtn.BorderSizePixel = 0
-    closeBtn.Text = "X"
-    closeBtn.TextColor3 = Config.UI.TextColor
-    closeBtn.TextScaled = true
-    closeBtn.Font = Enum.Font.GothamBold
-    closeBtn.Parent = mainFrame
-    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+    local StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Size = UDim2.new(1, 0, 0.15, 0)
+    StatusLabel.Position = UDim2.new(0, 0, 0.2, 0)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.Text = getgenv().AntiSystem.Active and "STATUS: ACTIVE" or "STATUS: INACTIVE"
+    StatusLabel.TextColor3 = getgenv().AntiSystem.Active and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+    StatusLabel.TextScaled = true
+    StatusLabel.Font = Enum.Font.GothamBold
+    StatusLabel.Parent = MainFrame
 
-    -- 事件绑定
-    local systemActive = false
-    openBtn.MouseButton1Click:Connect(function() mainFrame.Visible = true end)
-    closeBtn.MouseButton1Click:Connect(function() mainFrame.Visible = false end)
+    local ToggleButton = Instance.new("TextButton")
+    ToggleButton.Size = UDim2.new(0.6, 0, 0.2, 0)
+    ToggleButton.Position = UDim2.new(0.2, 0, 0.45, 0)
+    ToggleButton.BackgroundColor3 = getgenv().AntiSystem.Active and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(50, 200, 50)
+    ToggleButton.Text = getgenv().AntiSystem.Active and "DEACTIVATE" or "ACTIVATE"
+    ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ToggleButton.TextScaled = true
+    ToggleButton.Font = Enum.Font.GothamBlack
+    ToggleButton.Parent = MainFrame
+    Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(0, 8)
+
+    local CloseButton = Instance.new("TextButton")
+    CloseButton.Size = UDim2.new(0.1, 0, 0.15, 0)
+    CloseButton.Position = UDim2.new(0.88, 0, 0.02, 0)
+    CloseButton.BackgroundTransparency = 1
+    CloseButton.Text = "X"
+    CloseButton.TextColor3 = Color3.fromRGB(255, 50, 50)
+    CloseButton.TextScaled = true
+    CloseButton.Font = Enum.Font.GothamBold
+    CloseButton.Parent = MainFrame
+
+    -- Dragging Logic
+    local dragging, dragStart, startPos
+    MainFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true; dragStart = input.Position; startPos = MainFrame.Position
+        end
+    end)
+    MainFrame.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    -- Button Logic
+    OpenButton.MouseButton1Click:Connect(function() MainFrame.Visible = not MainFrame.Visible end)
+    CloseButton.MouseButton1Click:Connect(function() MainFrame.Visible = false end)
     
-    toggleBtn.MouseButton1Click:Connect(function()
-        systemActive = not systemActive
-        if systemActive then
-            toggleBtn.Text = "Deactivate"
-            toggleBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
-            status.Text = "Status: Active"
-            status.TextColor3 = Color3.fromRGB(100, 255, 100)
-            DefenseSystem.Start()
+    ToggleButton.MouseButton1Click:Connect(function()
+        getgenv().AntiSystem.Active = not getgenv().AntiSystem.Active
+        if getgenv().AntiSystem.Active then
+            ToggleButton.Text = "DEACTIVATE"
+            ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+            StatusLabel.Text = "STATUS: ACTIVE"
+            StatusLabel.TextColor3 = Color3.fromRGB(50, 255, 50)
+            StartDefenseSystem()
         else
-            toggleBtn.Text = "Activate"
-            toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-            status.Text = "Status: Inactive"
-            status.TextColor3 = Color3.fromRGB(255, 100, 100)
-            DefenseSystem.Stop()
+            ToggleButton.Text = "ACTIVATE"
+            ToggleButton.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+            StatusLabel.Text = "STATUS: INACTIVE"
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+            StopDefenseSystem()
         end
     end)
 end
 
--- ================== 防御系统核心 V2 ==================
-local DefenseSystem = {
-    Active = false,
-    Connections = {},
-    Settings = Config,
-}
+-- ================== 4. ACTIVE DEFENSE LOOPS ==================
+function StartDefenseSystem()
+    StopDefenseSystem() -- Clear existing loops
 
--- 统一的连接管理
-function DefenseSystem.AddConnection(conn)
-    table.insert(DefenseSystem.Connections, conn)
-end
+    local conns = getgenv().AntiSystem.Connections
 
-function DefenseSystem.Stop()
-    DefenseSystem.Active = false
-    for _, conn in ipairs(DefenseSystem.Connections) do
-        pcall(function() conn:Disconnect() end)
-    end
-    DefenseSystem.Connections = {}
-    -- 恢复碰撞
-    if Util.IsAlive(LocalPlayer) then
-        for _, v in ipairs(LocalPlayer.Character:GetDescendants()) do
-            if v:IsA("BasePart") then v.CanCollide = true end
-        end
-    end
-end
-
-function DefenseSystem.Start()
-    if DefenseSystem.Active then return end
-    DefenseSystem.Active = true
-    DefenseSystem.Stop() -- 先清理
-
-    -- 1. 反重力 (稳定版)
-    DefenseSystem.AddConnection(RunService.Heartbeat:Connect(function()
-        if Workspace.Gravity ~= Config.Gravity then
-            Workspace.Gravity = Config.Gravity
-        end
+    -- 1. Anti-Gravity & Fullbright
+    table.insert(conns, RunService.RenderStepped:Connect(function()
+        Workspace.Gravity = getgenv().AntiSystem.Settings.Gravity
+        Lighting.ClockTime = 12
+        Lighting.FogEnd = 999999
+        Lighting.GlobalShadows = false
+        Lighting.Brightness = 3
     end))
 
-    -- 2. 反虚空 (带安全点记忆)
-    local lastSafePos = Vector3.new(0, 10, 0)
-    DefenseSystem.AddConnection(RunService.Heartbeat:Connect(function()
-        if not Util.IsAlive(LocalPlayer) then return end
-        local root = Util.GetRoot(LocalPlayer.Character)
-        if root then
-            if root.Position.Y < Config.VoidThreshold then
+    -- 2. Anti-Void & Anti-Death
+    local lastSafePos = Vector3.new(0, 50, 0)
+    table.insert(conns, RunService.Heartbeat:Connect(function()
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        
+        if root and hum then
+            -- Anti-Void
+            if root.Position.Y < getgenv().AntiSystem.Settings.VoidThreshold then
                 root.CFrame = CFrame.new(lastSafePos)
+                root.Velocity = Vector3.zero
             else
                 lastSafePos = root.Position
             end
-        end
-    end))
 
-    -- 3. 反甩飞 V2 (温和模式，不关闭碰撞，改为限制速度)
-    DefenseSystem.AddConnection(RunService.Stepped:Connect(function()
-        if not Util.IsAlive(LocalPlayer) then return end
-        local root = Util.GetRoot(LocalPlayer.Character)
-        if root then
-            local vel = root.Velocity
-            if vel.Magnitude > 100 then
-                root.Velocity = vel.Unit * 50
-            end
-            local rotVel = root.RotVelocity
-            if rotVel.Magnitude > 50 then
-                root.RotVelocity = rotVel.Unit * 25
+            -- Anti-Death (Ghost Escape)
+            if hum.Health > 0 and hum.Health <= getgenv().AntiSystem.Settings.DangerHealth then
+                root.CFrame = root.CFrame + Vector3.new(0, 200, 0) -- Teleport to sky
+                hum.Health = hum.MaxHealth -- Attempt local heal visual
             end
         end
     end))
 
-    -- 4. 反瞄准/隐身 V2 (优化性能，只处理玩家)
-    DefenseSystem.AddConnection(RunService.RenderStepped:Connect(function()
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player == LocalPlayer then continue end
-            local char = player.Character
-            if char then
-                for _, part in ipairs(char:GetChildren()) do
-                    if part:IsA("BasePart") and part.Transparency > 0.9 then
-                        part.Transparency = 0
+    -- 3. Physics Protection (Anti-Fling, Trample, Sit, Anchor, Suck, Attach)
+    table.insert(conns, RunService.Stepped:Connect(function()
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        
+        -- State Locking (Anti-Sit, Trample, Freeze)
+        if hum then
+            hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+            if hum.Sit then hum.Sit = false end
+            if hum.PlatformStand then hum.PlatformStand = false end
+        end
+
+        if char then
+            for _, obj in ipairs(char:GetDescendants()) do
+                -- Anti-Anchor
+                if obj:IsA("BasePart") and obj.Name ~= "HumanoidRootPart" then
+                    obj.Anchored = false
+                end
+                -- Anti-Suck / Anti-Attach
+                if obj:IsA("BodyMover") or obj:IsA("LinearVelocity") or obj:IsA("AlignPosition") then
+                    obj:Destroy()
+                end
+                if (obj:IsA("Weld") or obj:IsA("WeldConstraint")) and obj.Part0 and obj.Part1 then
+                    if not obj.Part0:IsDescendantOf(char) or not obj.Part1:IsDescendantOf(char) then
+                        obj:Destroy()
                     end
                 end
-                -- 干扰头部碰撞
-                local head = char:FindFirstChild("Head")
-                if head and head:IsA("BasePart") then
-                    head.CanCollide = false
+            end
+        end
+
+        -- Anti-Fling (Disable other players' collisions)
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                for _, part in ipairs(player.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
                 end
             end
         end
     end))
 
-    -- 5. 反死亡 V2 (更可靠的传送与复活)
-    local function SetupAntiDeath(char)
-        local hum = char:WaitForChild("Humanoid", 5)
-        if not hum then return end
-        local healthConn
-        healthConn = hum.HealthChanged:Connect(function(health)
-            if health <= Config.DangerHealth and health > 0 then
-                local root = Util.GetRoot(char)
-                if root then
-                    -- 向随机安全方向传送
-                    local safeDir = Vector3.new(math.random(-1,1), 0, math.random(-1,1)).Unit * Config.TeleportDistance
-                    root.CFrame = CFrame.new(root.Position + safeDir)
+    -- 4. ESP & Anti-Invisibility & Anti-Aimbot (Jitter)
+    table.insert(conns, RunService.RenderStepped:Connect(function()
+        -- Anti-Aimbot: Tiny Jitter on your Head
+        local char = LocalPlayer.Character
+        local head = char and char:FindFirstChild("Head")
+        if head then
+            head.LocalTransparencyModifier = 0
+            head.CFrame = head.CFrame * CFrame.new(math.random(-1,1)*0.05, math.random(-1,1)*0.05, math.random(-1,1)*0.05)
+        end
+
+        -- ESP / Anti-Invis
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local pChar = player.Character
+                for _, part in ipairs(pChar:GetDescendants()) do
+                    if part:IsA("BasePart") and part.Transparency > 0.5 then
+                        part.Transparency = 0 -- Reveal invisible players
+                    end
+                end
+                -- Apply Highlight
+                if not pChar:FindFirstChild("AntiESP") then
+                    local hl = Instance.new("Highlight")
+                    hl.Name = "AntiESP"
+                    hl.FillColor = Color3.fromRGB(255, 0, 0)
+                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    hl.FillTransparency = 0.5
+                    hl.Parent = pChar
                 end
             end
-        end)
-        DefenseSystem.AddConnection(healthConn)
-
-        local diedConn
-        diedConn = hum.Died:Connect(function()
-            local backpackItems = {}
-            for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
-                if tool:IsA("Tool") then table.insert(backpackItems, tool:Clone()) end
-            end
-            -- 快速重生
-            LocalPlayer:LoadCharacter()
-            -- 等待角色加载并传送回原位
-            repeat task.wait() until Util.IsAlive(LocalPlayer)
-            local newRoot = Util.GetRoot(LocalPlayer.Character)
-            if newRoot then
-                newRoot.CFrame = CFrame.new(lastSafePos) -- 使用虚空记录的安全位置
-            end
-            -- 返还工具
-            for _, tool in ipairs(backpackItems) do
-                tool.Parent = LocalPlayer.Backpack
-            end
-        end)
-        DefenseSystem.AddConnection(diedConn)
-    end
-    if Util.IsAlive(LocalPlayer) then
-        SetupAntiDeath(LocalPlayer.Character)
-    end
-    DefenseSystem.AddConnection(LocalPlayer.CharacterAdded:Connect(SetupAntiDeath))
-
-    -- 6. 反聊天命令 V2 (深度拦截远程事件)
-    local function blockChatCommand(message)
-        local lower = message:lower()
-        local forbidden = {"/kill", "/jail", "/freeze", "/kick", "/ban", "%%kill"}
-        for _, cmd in ipairs(forbidden) do
-            if lower:find(cmd) then
-                return true
-            end
-        end
-        return false
-    end
-    DefenseSystem.AddConnection(LocalPlayer.Chatted:Connect(function(msg)
-        if blockChatCommand(msg) then
-            -- 发送空白消息进行干扰 (不保证100%有效)
-            ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer("", "All")
         end
     end))
 
-    -- 7. 反反作弊 V2 (更稳健的干扰)
+    -- 5. Anti-Touch (Disable KillBricks locally)
+    local function HandleParts(part)
+        if part:IsA("BasePart") then
+            local name = string.lower(part.Name)
+            if string.find(name, "kill") or string.find(name, "lava") or string.find(name, "dead") then
+                part.CanTouch = false
+            end
+        end
+    end
+    for _, part in ipairs(Workspace:GetDescendants()) do HandleParts(part) end
+    table.insert(conns, Workspace.DescendantAdded:Connect(HandleParts))
+
+    -- 6. Spoof Anti-Cheat Global Variables
     pcall(function()
-        getgenv().anticheat_bypass = true
-        getgenv().anti_kick = true
-        getgenv().anti_ban = true
-        -- 尝试修改一些服务端可见变量 (仅客户端效果)
-        settings().Physics.AllowCustomGravity = true
+        getgenv().antispeed = false
+        getgenv().antitp = false
+        getgenv().bypass = true
     end)
-
-    -- ================== V2 新增防御功能 ==================
-
-    -- 8. 反卡顿/反延迟 (限制模拟半径与图形设置)
-    DefenseSystem.AddConnection(RunService.Heartbeat:Connect(function()
-        if Workspace.StreamingMinRadius > Config.MaxSimulationRadius then
-            Workspace.StreamingMinRadius = Config.MaxSimulationRadius
-        end
-        -- 降低特效质量以防卡顿
-        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-    end))
-
-    -- 9. 反屏幕晃动/反盲视 (去除相机特效)
-    DefenseSystem.AddConnection(RunService.RenderStepped:Connect(function()
-        local cam = Workspace.CurrentCamera
-        if cam then
-            cam.FieldOfView = 70
-            for _, effect in ipairs(cam:GetChildren()) do
-                if effect:IsA("PostEffect") then
-                    effect:Destroy()
-                end
-            end
-            -- 移除镜头震动
-            if cam:FindFirstChild("CameraShake") then
-                cam.CameraShake:Destroy()
-            end
-        end
-    end))
-
-    -- 10. 反传送 (检测突然的大位移并拦截)
-    DefenseSystem.AddConnection(RunService.Heartbeat:Connect(function()
-        if not Util.IsAlive(LocalPlayer) then return end
-        local root = Util.GetRoot(LocalPlayer.Character)
-        if not root then return end
-        local currentPos = root.Position
-        if lastSafePos and (currentPos - lastSafePos).Magnitude > 500 then
-            root.CFrame = CFrame.new(lastSafePos)
-        end
-        lastSafePos = currentPos
-    end))
-
-    -- 11. 反偷工具 (保护背包)
-    DefenseSystem.AddConnection(LocalPlayer.Backpack.ChildAdded:Connect(function(child)
-        if child:IsA("Tool") and not child:GetAttribute("SuperAntiSafe") then
-            child:SetAttribute("SuperAntiSafe", true)
-            -- 禁止其他脚本移除
-            local conn
-            conn = child.AncestryChanged:Connect(function()
-                if child.Parent ~= LocalPlayer.Backpack and child.Parent ~= LocalPlayer.Character then
-                    pcall(function() child:Clone().Parent = LocalPlayer.Backpack end)
-                end
-            end)
-            DefenseSystem.AddConnection(conn)
-        end
-    end))
-
-    print("[Super Anti V2] 所有防御系统已激活。")
+    
+    StarterGui:SetCore("SendNotification", {
+        Title = "Super Anti V2.1",
+        Text = "Defense Systems Online.",
+        Duration = 3
+    })
 end
 
--- ================== 启动流程 ==================
-UI.CreateLoadingScreen()
-task.wait(5)  -- 等待加载动画完成
-UI.CreateMainPanel()
+-- ================== 5. STOP SYSTEM ==================
+function StopDefenseSystem()
+    -- Disconnect all loops
+    for _, conn in ipairs(getgenv().AntiSystem.Connections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    getgenv().AntiSystem.Connections = {}
+    
+    -- Restore Lighting
+    Lighting.ClockTime = OriginalLighting.ClockTime
+    Lighting.FogEnd = OriginalLighting.FogEnd
+    Lighting.GlobalShadows = OriginalLighting.GlobalShadows
+    Lighting.Brightness = OriginalLighting.Brightness
+
+    -- Restore Collisions & Remove ESP
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            for _, part in ipairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = true end
+            end
+            local esp = player.Character:FindFirstChild("AntiESP")
+            if esp then esp:Destroy() end
+        end
+    end
+    
+    StarterGui:SetCore("SendNotification", {
+        Title = "Super Anti V2.1",
+        Text = "Defense Systems Offline.",
+        Duration = 3
+    })
+end
+
+-- Initialize GUI
+CreateMainGUI()
